@@ -354,8 +354,6 @@ void D3D12Sample::CreateDeviceAndSwapChain ()
 ///////////////////////////////////////////////////////////////////////////////
 void D3D12Sample::CreateAllocatorsAndCommandLists ()
 {
-
-
 	for (int i = 0; i < GetQueueSlotCount (); ++i) {
 		device_->CreateCommandAllocator (D3D12_COMMAND_LIST_TYPE_DIRECT,
 			IID_PPV_ARGS (&commandAllocators_ [i]));
@@ -584,8 +582,10 @@ void D3D12Sample::CreatePipelineStateObject ()
 {
 	static const D3D12_INPUT_ELEMENT_DESC layout [] =
 	{
-		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, 
+			D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, 
+			D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 	};
 
 	ComPtr<ID3DBlob> vertexShader;

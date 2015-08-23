@@ -30,3 +30,4 @@ The actual application is in `src/D3D12Sample.cpp`. The rest is scaffolding of v
 * Constant buffers are placed in an `upload` heap. For constant buffers which are read exactly once per frame this is preferable to copying the over to the GPU and then reading them once.
 * Barriers are as specific as possible and grouped. Transitioning many resources in one barrier is faster than using multiple barriers as the GPU have to flush caches, and if multiple barriers are grouped, the caches are only flushed once.
 * The application uses a root signature slot for the most frequently changing constant buffer.
+* The `DEBUG` configuration will automatically enable the debug layers to validate the API usage.
