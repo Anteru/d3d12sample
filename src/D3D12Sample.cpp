@@ -23,12 +23,15 @@ struct RenderEnvironment
 {
 	ComPtr<ID3D12Device> device;
 	ComPtr<ID3D12CommandQueue> queue;
-	ComPtr<IDXGIFactory4> dxgiFactory;
 	ComPtr<IDXGISwapChain> swapChain;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-RenderEnvironment CreateDeviceAndSwapChain (
+/**
+Create everything we need for rendering, this includes a device, a command queue,
+and a swap chain.
+*/
+RenderEnvironment CreateDeviceAndSwapChainHelper (
 	_In_opt_ IDXGIAdapter* adapter,
 	D3D_FEATURE_LEVEL minimumFeatureLevel,
 	_In_opt_ const DXGI_SWAP_CHAIN_DESC* swapChainDesc)
@@ -52,7 +55,8 @@ RenderEnvironment CreateDeviceAndSwapChain (
 		throw std::runtime_error ("Command queue creation failed.");
 	}
 
-	hr = CreateDXGIFactory1 (IID_PPV_ARGS (&result.dxgiFactory));
+	ComPtr<IDXGIFactory4> dxgiFactory;
+	hr = CreateDXGIFactory1 (IID_PPV_ARGS (&dxgiFactory));
 
 	if (FAILED (hr)) {
 		throw std::runtime_error ("DXGI factory creation failed.");
@@ -60,7 +64,7 @@ RenderEnvironment CreateDeviceAndSwapChain (
 
 	// Must copy into non-const space
 	DXGI_SWAP_CHAIN_DESC swapChainDescCopy = *swapChainDesc;
-	hr = result.dxgiFactory->CreateSwapChain (
+	hr = dxgiFactory->CreateSwapChain (
 		result.queue.Get (),
 		&swapChainDescCopy,
 		&result.swapChain
@@ -84,85 +88,102 @@ D3D12Sample::~D3D12Sample ()
 {
 }
 
+///////////////////////////////////////////////////////////////////////////////
+void D3D12Sample::PrepareRender ()
+{
+	commandAllocators_ [currentBackBuffer_]->Reset ();
+
+	auto commandList = commandLists_ [currentBackBuffer_].Get ();
+	commandList->Reset (
+		commandAllocators_ [currentBackBuffer_].Get (), nullptr);
+	commandList->OMSetRenderTargets (1, &descriptorHeap_->GetCPUDescriptorHandleForHeapStart (), true, nullptr);
+	commandList->RSSetViewports (1, &viewport_);
+	commandList->RSSetScissorRects (1, &rectScissor_);
+
+	// Transition back buffer
+	D3D12_RESOURCE_BARRIER barrier;
+	barrier.Transition.pResource = renderTarget_.Get ();
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+	commandList->ResourceBarrier (1, &barrier);
+
+	static const float clearColor [] = {
+		0.042f, 0.042f, 0.042f,
+		1
+	};
+
+	commandList->ClearRenderTargetView (descriptorHeap_->GetCPUDescriptorHandleForHeapStart (),
+		clearColor, 0, nullptr);
+}
+
+///////////////////////////////////////////////////////////////////////////////
 void D3D12Sample::Render ()
 {
-	ID3D12PipelineState* initialState = nullptr;
-
-	{
-		commandAllocators_ [currentBackBuffer_]->Reset ();
-
-		auto commandList = commandLists_ [currentBackBuffer_].Get ();
-		commandList->Reset (
-			commandAllocators_ [currentBackBuffer_].Get (), initialState);
-		commandList->OMSetRenderTargets (1, &descriptorHeap_->GetCPUDescriptorHandleForHeapStart (), true, nullptr);
-		commandList->RSSetViewports (1, &viewport_);
-		commandList->RSSetScissorRects (1, &rectScissor_);
-
-		// Transition back buffer
-		D3D12_RESOURCE_BARRIER barrier;
-		barrier.Transition.pResource = renderTarget_.Get ();
-		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-		barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-		barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-		commandList->ResourceBarrier (1, &barrier);
-
-		static const float clearColor [] = {
-			0.042f, 0.042f, 0.042f,
-			1
-		};
-
-		commandList->ClearRenderTargetView (descriptorHeap_->GetCPUDescriptorHandleForHeapStart (),
-			clearColor, 0, nullptr);
-	}
+	PrepareRender ();
 
 	static int frameNumber = 0;
 	frameNumber++;
+	
+	auto commandList = commandLists_ [currentBackBuffer_].Get ();
 
-	{
-		auto commandList = commandLists_ [currentBackBuffer_].Get ();
+	// Update our constant buffer, just some periodic scaling
+	void* p;
+	constantBuffers_ [GetQueueSlot ()]->Map (0, nullptr, &p);
+	float* f = static_cast<float*>(p);
+	f [0] = std::abs (std::sin (static_cast<float> (frameNumber) / 64.0f));
+	constantBuffers_ [GetQueueSlot ()]->Unmap (0, nullptr);
 
-		void* p;
-		constantBuffers_ [GetQueueSlot ()]->Map (0, nullptr, &p);
-		float* f = static_cast<float*>(p);
-		f [0] = std::abs (std::sin (static_cast<float> (frameNumber) / 64.0f));
-		constantBuffers_ [GetQueueSlot ()]->Unmap (0, nullptr);
-		
-		ID3D12DescriptorHeap* heaps [] = { srvDescriptorHeap_.Get () };
-		commandList->SetPipelineState (pso_.Get ());
-		commandList->SetGraphicsRootSignature (rootSignature_.Get ());
-		commandList->SetDescriptorHeaps (1, heaps);
-		commandList->SetGraphicsRootConstantBufferView (1, 
-			constantBuffers_ [GetQueueSlot ()]->GetGPUVirtualAddress ());
-		commandList->SetGraphicsRootDescriptorTable (0,
-			srvDescriptorHeap_->GetGPUDescriptorHandleForHeapStart ());
+	// Set our state (shaders, etc.)
+	commandList->SetPipelineState (pso_.Get ());
+	
+	// Set our root signature
+	commandList->SetGraphicsRootSignature (rootSignature_.Get ());
+	
+	// Set the descriptor heap containing the texture srv
+	ID3D12DescriptorHeap* heaps [] = { srvDescriptorHeap_.Get () };
+	commandList->SetDescriptorHeaps (1, heaps);
 
-		commandList->IASetPrimitiveTopology (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		commandList->IASetVertexBuffers (0, 1, &vertexBufferView_);
-		commandList->IASetIndexBuffer (&indexBufferView_);
-		commandList->DrawIndexedInstanced (6, 1, 0, 0, 0);
-	}
+	// Set slot 0 of our root signature to point to our descriptor heap with
+	// the texture SRV
+	commandList->SetGraphicsRootDescriptorTable (0,
+		srvDescriptorHeap_->GetGPUDescriptorHandleForHeapStart ());
 
-	{
-		// Transition the swap chain back to present
-		D3D12_RESOURCE_BARRIER barrier;
-		barrier.Transition.pResource = renderTarget_.Get ();
-		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-		barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-		barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	// Set slot 1 of our root signature to the constant buffer view
+	commandList->SetGraphicsRootConstantBufferView (1,
+		constantBuffers_ [GetQueueSlot ()]->GetGPUVirtualAddress ());
 
-		auto commandList = commandLists_ [currentBackBuffer_].Get ();
-		commandList->ResourceBarrier (1, &barrier);
+	commandList->IASetPrimitiveTopology (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	commandList->IASetVertexBuffers (0, 1, &vertexBufferView_);
+	commandList->IASetIndexBuffer (&indexBufferView_);
+	commandList->DrawIndexedInstanced (6, 1, 0, 0, 0);
+	
+	FinalizeRender ();
+}
 
-		commandList->Close ();
+///////////////////////////////////////////////////////////////////////////////
+void D3D12Sample::FinalizeRender ()
+{
+	// Transition the swap chain back to present
+	D3D12_RESOURCE_BARRIER barrier;
+	barrier.Transition.pResource = renderTarget_.Get ();
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-		ID3D12CommandList* commandLists [] = { commandList };
-		commandQueue_->ExecuteCommandLists (std::extent<decltype(commandLists)>::value, commandLists);
-	}
+	auto commandList = commandLists_ [currentBackBuffer_].Get ();
+	commandList->ResourceBarrier (1, &barrier);
+
+	commandList->Close ();
+
+	// Execute our commands
+	ID3D12CommandList* commandLists [] = { commandList };
+	commandQueue_->ExecuteCommandLists (std::extent<decltype(commandLists)>::value, commandLists);
 }
 
 namespace {
@@ -183,7 +204,6 @@ void D3D12Sample::Run (const int frameCount)
 	for (int i = 0; i < frameCount; ++i) {
 		WaitForFence (frameFences_[GetQueueSlot ()].Get (), 
 			fenceValues_[GetQueueSlot ()], frameFenceEvents_[GetQueueSlot ()]);
-		// We can readback the queries for the current slot
 		
 		Render ();
 		Present ();
@@ -201,11 +221,16 @@ void D3D12Sample::Run (const int frameCount)
 void D3D12Sample::Present ()
 {
 	swapChain_->Present (1, 0);
+
+	// Take the next back buffer from our chain
 	currentBackBuffer_ = (currentBackBuffer_ + 1) % GetQueueSlotCount ();
 	swapChain_->GetBuffer (currentBackBuffer_, IID_PPV_ARGS (&renderTarget_));
+
+	// Update our render target slot
 	device_->CreateRenderTargetView (renderTarget_.Get (), nullptr,
 		descriptorHeap_->GetCPUDescriptorHandleForHeapStart ());
 
+	// Mark the fence for the current frame.
 	const auto fenceValue = currentFenceValue_;
 	commandQueue_->Signal (frameFences_ [currentBackBuffer_].Get (), fenceValue);
 	fenceValues_[currentBackBuffer_] = fenceValue;
@@ -213,13 +238,8 @@ void D3D12Sample::Present ()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-void D3D12Sample::Initialize ()
+void D3D12Sample::SetupSwapChain ()
 {
-	window_.reset (new Window ("Anteru's D3D12 sample", 512, 512));
-
-	CreateDevice ();
-	CreateRootSignature ();
-
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
 	heapDesc.NumDescriptors = 1;
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -228,53 +248,36 @@ void D3D12Sample::Initialize ()
 
 	currentFenceValue_ = 0;
 
+	// Create fences for each frame so we can protect resources and wait for
+	// any given frame
 	for (int i = 0; i < GetQueueSlotCount (); ++i) {
-		frameFenceEvents_[i] = CreateEvent (nullptr, FALSE, FALSE, nullptr);
-		fenceValues_[i] = 0;
-		device_->CreateFence (currentFenceValue_, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS (&frameFences_ [i]));
+		frameFenceEvents_ [i] = CreateEvent (nullptr, FALSE, FALSE, nullptr);
+		fenceValues_ [i] = 0;
+		device_->CreateFence (currentFenceValue_, D3D12_FENCE_FLAG_NONE, 
+			IID_PPV_ARGS (&frameFences_ [i]));
 	}
 
 	swapChain_->GetBuffer (currentBackBuffer_, IID_PPV_ARGS (&renderTarget_));
 	device_->CreateRenderTargetView (renderTarget_.Get (), nullptr,
 		descriptorHeap_->GetCPUDescriptorHandleForHeapStart ());
+}
 
-	static const D3D12_INPUT_ELEMENT_DESC layout [] =
-	{
-		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
-	};
+///////////////////////////////////////////////////////////////////////////////
+void D3D12Sample::Initialize ()
+{
+	window_.reset (new Window ("Anteru's D3D12 sample", 512, 512));
 
-	ComPtr<ID3DBlob> vertexShader;
-	D3DCompile (SampleShaders, sizeof (SampleShaders),
-		"", nullptr, nullptr,
-		"VS_main", "vs_5_0", 0, 0, &vertexShader, nullptr);
+	CreateDeviceAndSwapChain ();
+	CreateAllocatorsAndCommandLists ();
+	CreateViewportScissor ();
+	CreateRootSignature ();
 
-	ComPtr<ID3DBlob> pixelShader;
-	D3DCompile (SampleShaders, sizeof (SampleShaders),
-		"", nullptr, nullptr,
-		"PS_main", "ps_5_0", 0, 0, &pixelShader, nullptr);
+	CreatePipelineStateObject ();
+	CreateConstantBuffer ();
 
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-	psoDesc.VS.BytecodeLength = vertexShader->GetBufferSize ();
-	psoDesc.VS.pShaderBytecode = vertexShader->GetBufferPointer ();
-	psoDesc.PS.BytecodeLength = pixelShader->GetBufferSize ();
-	psoDesc.PS.pShaderBytecode = pixelShader->GetBufferPointer ();
-	psoDesc.pRootSignature = rootSignature_.Get ();
-	psoDesc.NumRenderTargets = 1;
-	psoDesc.RTVFormats [0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-	psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-	psoDesc.InputLayout.NumElements = std::extent<decltype(layout)>::value;
-	psoDesc.InputLayout.pInputElementDescs = layout;
-	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC (D3D12_DEFAULT);
-	psoDesc.BlendState = CD3DX12_BLEND_DESC (D3D12_DEFAULT);
-	psoDesc.SampleDesc.Count = 1;
-	psoDesc.DepthStencilState.DepthEnable = false;
-	psoDesc.DepthStencilState.StencilEnable = false;
-	psoDesc.SampleMask = 0xFFFFFFFF;
-	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-
-	device_->CreateGraphicsPipelineState (&psoDesc, IID_PPV_ARGS (&pso_));
-
+	// Create our upload fence, command list and command allocator
+	// This will be only used while creating the mesh buffer and the texture
+	// to upload data to the GPU.
 	device_->CreateFence (0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS (&uploadFence_));
 
 	device_->CreateCommandAllocator (D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -284,21 +287,19 @@ void D3D12Sample::Initialize ()
 		IID_PPV_ARGS (&initCommandList_));
 
 	CreateMeshBuffers ();
-	CreateConstantBuffer ();
 	CreateTexture ();
 
 	initCommandList_->Close ();
 
+	// Execute the upload and finish the command list
 	ID3D12CommandList* commandLists [] = { initCommandList_.Get () };
 	commandQueue_->ExecuteCommandLists (std::extent<decltype(commandLists)>::value, commandLists);
 	commandQueue_->Signal (uploadFence_.Get (), 1);
 
-	auto waitEvent = CreateEvent (nullptr, FALSE, FALSE, "Upload Fence Event");
-	if (uploadFence_->GetCompletedValue () != 1) {
-		uploadFence_->SetEventOnCompletion (1, waitEvent);
-		WaitForSingleObject (waitEvent, INFINITE);
-	}
+	auto waitEvent = CreateEvent (nullptr, FALSE, FALSE, nullptr);
+	WaitForFence (uploadFence_.Get (), 1, waitEvent);
 
+	// Cleanup our upload handle
 	initCommandAllocator_->Reset ();
 	initCommandList_.Reset ();
 	initCommandAllocator_.Reset ();
@@ -315,11 +316,17 @@ void D3D12Sample::Shutdown ()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-void D3D12Sample::CreateDevice ()
+void D3D12Sample::CreateDeviceAndSwapChain ()
 {
+	// Enable the debug layers when in debug mode
+	// If this fails, install the Graphics Tools for Windows. On Windows 10,
+	// open settings, Apps, Apps & Features, Optional features, Add Feature,
+	// and add the graphics tools
+#ifdef _DEBUG
 	ComPtr<ID3D12Debug> debugController;
 	D3D12GetDebugInterface (IID_PPV_ARGS (&debugController));
 	debugController->EnableDebugLayer ();
+#endif
 
 	DXGI_SWAP_CHAIN_DESC swapChainDesc;
 	::ZeroMemory (&swapChainDesc, sizeof (swapChainDesc));
@@ -334,22 +341,34 @@ void D3D12Sample::CreateDevice ()
 	swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	swapChainDesc.Windowed = true;
 
-	auto renderEnv = CreateDeviceAndSwapChain (nullptr, D3D_FEATURE_LEVEL_11_0,
+	auto renderEnv = CreateDeviceAndSwapChainHelper (nullptr, D3D_FEATURE_LEVEL_11_0,
 		&swapChainDesc);
 
 	device_ = renderEnv.device;
 	commandQueue_ = renderEnv.queue;
 	swapChain_ = renderEnv.swapChain;
 
+	SetupSwapChain ();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void D3D12Sample::CreateAllocatorsAndCommandLists ()
+{
+
+
 	for (int i = 0; i < GetQueueSlotCount (); ++i) {
 		device_->CreateCommandAllocator (D3D12_COMMAND_LIST_TYPE_DIRECT,
 			IID_PPV_ARGS (&commandAllocators_ [i]));
 		device_->CreateCommandList (0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-			commandAllocators_[i].Get (), nullptr,
-			IID_PPV_ARGS (&commandLists_[i]));
-		commandLists_[i]->Close ();
+			commandAllocators_ [i].Get (), nullptr,
+			IID_PPV_ARGS (&commandLists_ [i]));
+		commandLists_ [i]->Close ();
 	}
+}
 
+///////////////////////////////////////////////////////////////////////////////
+void D3D12Sample::CreateViewportScissor ()
+{
 	rectScissor_ = { 0, 0, window_->GetWidth (), window_->GetHeight () };
 
 	viewport_ = { 0.0f, 0.0f,
@@ -362,8 +381,11 @@ void D3D12Sample::CreateDevice ()
 ///////////////////////////////////////////////////////////////////////////////
 void D3D12Sample::CreateRootSignature ()
 {
+	// We need one descriptor heap to store our texture SRV which cannot go
+	// into the root signature. So create a SRV type heap with one entry
 	D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc = {};
 	descriptorHeapDesc.NumDescriptors = 1;
+	// This heap contains SRV, UAV or CBVs -- in our case one SRV
 	descriptorHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	descriptorHeapDesc.NodeMask = 0;
 	descriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
@@ -372,17 +394,28 @@ void D3D12Sample::CreateRootSignature ()
 
 	ComPtr<ID3DBlob> rootBlob;
 	ComPtr<ID3DBlob> errorBlob;
+
+	// We have two root parameters, one is a pointer to a descriptor heap
+	// with a SRV, the second is a constant buffer view
 	CD3DX12_ROOT_PARAMETER parameters [2];
+
+	// Create a descriptor table with one entry in our descriptor heap
 	CD3DX12_DESCRIPTOR_RANGE range{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0 };
 	parameters [0].InitAsDescriptorTable (1, &range);
+	
+	// Our constant buffer view
 	parameters [1].InitAsConstantBufferView (0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
 
+	// We don't use another descriptor heap for the sampler, instead we use a
+	// static sampler
 	CD3DX12_STATIC_SAMPLER_DESC samplers [1];
 	samplers [0].Init (0, D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT);
 
 	CD3DX12_ROOT_SIGNATURE_DESC descRootSignature;
 
-	descRootSignature.Init (2, parameters, 1, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+	// Create the root signature
+	descRootSignature.Init (2, parameters, 
+		1, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 	D3D12SerializeRootSignature (&descRootSignature,
 		D3D_ROOT_SIGNATURE_VERSION_1, &rootBlob, &errorBlob);
 	device_->CreateRootSignature (0,
@@ -443,7 +476,7 @@ void D3D12Sample::CreateMeshBuffers ()
 
 	static const int uploadBufferSize = sizeof (vertices) + sizeof (indices);
 
-	// Create upload buffer
+	// Create upload buffer on CPU
 	device_->CreateCommittedResource (&CD3DX12_HEAP_PROPERTIES (D3D12_HEAP_TYPE_UPLOAD),
 		D3D12_HEAP_FLAG_NONE,
 		&CD3DX12_RESOURCE_DESC::Buffer (uploadBufferSize),
@@ -451,7 +484,9 @@ void D3D12Sample::CreateMeshBuffers ()
 		nullptr,
 		IID_PPV_ARGS (&uploadBuffer_));
 
-	// Create vertex & index buffer
+	// Create vertex & index buffer on the GPU
+	// HEAP_TYPE_DEFAULT is on GPU, we also initialize with COPY_DEST state
+	// so we don't have to transition into this before copying into them
 	device_->CreateCommittedResource (&CD3DX12_HEAP_PROPERTIES (D3D12_HEAP_TYPE_DEFAULT),
 		D3D12_HEAP_FLAG_NONE,
 		&CD3DX12_RESOURCE_DESC::Buffer (sizeof (vertices)),
@@ -475,24 +510,30 @@ void D3D12Sample::CreateMeshBuffers ()
 	indexBufferView_.SizeInBytes = sizeof (indices);
 	indexBufferView_.Format = DXGI_FORMAT_R32_UINT;
 
-	// Upload
+	// Copy data on CPU into the upload buffer
 	void* p;
 	uploadBuffer_->Map (0, nullptr, &p);
 	::memcpy (p, vertices, sizeof (vertices));
-	::memcpy (static_cast<unsigned char*>(p) + sizeof (vertices), indices, sizeof (indices));
+	::memcpy (static_cast<unsigned char*>(p) + sizeof (vertices), 
+		indices, sizeof (indices));
 	uploadBuffer_->Unmap (0, nullptr);
 
-	// Copies
+	// Copy data from upload buffer on CPU into the index/vertex buffer on 
+	// the GPU
 	initCommandList_->CopyBufferRegion (vertexBuffer_.Get (), 0,
 		uploadBuffer_.Get (), 0, sizeof (vertices));
 	initCommandList_->CopyBufferRegion (indexBuffer_.Get (), 0,
 		uploadBuffer_.Get (), sizeof (vertices), sizeof (indices));
 
-	// Barriers
-	initCommandList_->ResourceBarrier (1, &CD3DX12_RESOURCE_BARRIER::Transition (vertexBuffer_.Get (),
-		D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
-	initCommandList_->ResourceBarrier (1, &CD3DX12_RESOURCE_BARRIER::Transition (indexBuffer_.Get (),
-		D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER));
+	// Barriers, batch them together
+	CD3DX12_RESOURCE_BARRIER barriers [2] = {
+		CD3DX12_RESOURCE_BARRIER::Transition (vertexBuffer_.Get (),
+		D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER),
+		CD3DX12_RESOURCE_BARRIER::Transition (indexBuffer_.Get (),
+			D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER)
+	};
+
+	initCommandList_->ResourceBarrier (2, barriers);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -536,6 +577,47 @@ void D3D12Sample::CreateTexture ()
 
 	device_->CreateShaderResourceView (image_.Get (), &shaderResourceViewDesc,
 		srvDescriptorHeap_->GetCPUDescriptorHandleForHeapStart ());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void D3D12Sample::CreatePipelineStateObject ()
+{
+	static const D3D12_INPUT_ELEMENT_DESC layout [] =
+	{
+		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+	};
+
+	ComPtr<ID3DBlob> vertexShader;
+	D3DCompile (SampleShaders, sizeof (SampleShaders),
+		"", nullptr, nullptr,
+		"VS_main", "vs_5_0", 0, 0, &vertexShader, nullptr);
+
+	ComPtr<ID3DBlob> pixelShader;
+	D3DCompile (SampleShaders, sizeof (SampleShaders),
+		"", nullptr, nullptr,
+		"PS_main", "ps_5_0", 0, 0, &pixelShader, nullptr);
+
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+	psoDesc.VS.BytecodeLength = vertexShader->GetBufferSize ();
+	psoDesc.VS.pShaderBytecode = vertexShader->GetBufferPointer ();
+	psoDesc.PS.BytecodeLength = pixelShader->GetBufferSize ();
+	psoDesc.PS.pShaderBytecode = pixelShader->GetBufferPointer ();
+	psoDesc.pRootSignature = rootSignature_.Get ();
+	psoDesc.NumRenderTargets = 1;
+	psoDesc.RTVFormats [0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+	psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+	psoDesc.InputLayout.NumElements = std::extent<decltype(layout)>::value;
+	psoDesc.InputLayout.pInputElementDescs = layout;
+	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC (D3D12_DEFAULT);
+	psoDesc.BlendState = CD3DX12_BLEND_DESC (D3D12_DEFAULT);
+	psoDesc.SampleDesc.Count = 1;
+	psoDesc.DepthStencilState.DepthEnable = false;
+	psoDesc.DepthStencilState.StencilEnable = false;
+	psoDesc.SampleMask = 0xFFFFFFFF;
+	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+	device_->CreateGraphicsPipelineState (&psoDesc, IID_PPV_ARGS (&pso_));
 }
 }
 

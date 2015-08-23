@@ -50,13 +50,21 @@ protected:
 private:
 	void Initialize ();
 	void Shutdown ();
+
+	void PrepareRender ();
+	void FinalizeRender ();
+
 	void Render ();
 	void Present ();
-	void CreateDevice ();
+	void CreateDeviceAndSwapChain ();
+	void CreateAllocatorsAndCommandLists ();
+	void CreateViewportScissor ();
 	void CreateRootSignature ();
 	void CreateMeshBuffers ();
+	void CreatePipelineStateObject ();
 	void CreateConstantBuffer ();
 	void CreateTexture ();
+	void SetupSwapChain ();
 
 	std::unique_ptr<Window> window_;
 
