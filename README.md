@@ -27,7 +27,7 @@ The actual application is in `src/D3D12Sample.cpp`. The rest is scaffolding of v
 
 * The application queues multiple frames. To protect the per-frame command lists and other resources, fences are created. After the command list for a frame is submitted, the fence is signaled and the next command list is used. Before the wrap-around occures, the application waits for the fence to ensure GPU resources don't get overwritten.
 * The texture and mesh data is uploaded using an upload heap. This happens during the initialization and shows how to transfer data to the GPU. Ideally, this should be running on the copy queue but for the sake of simplicity it is run on the general graphics queue.
-* Constant buffers are placed in an `upload` heap. For constant buffers which are read exactly once per frame this is preferable to copying the over to the GPU and then reading them once.
+* Constant buffers are placed in an `upload` heap. Placing them in the upload heap is best if the buffers are read once.
 * Barriers are as specific as possible and grouped. Transitioning many resources in one barrier is faster than using multiple barriers as the GPU have to flush caches, and if multiple barriers are grouped, the caches are only flushed once.
 * The application uses a root signature slot for the most frequently changing constant buffer.
-* The `DEBUG` configuration will automatically enable the debug layers to validate the API usage.
+* The `DEBUG` configuration will automatically enable the debug layers to validate the API usage. Check the source code for details, as this requires the graphics tools to be installed.
