@@ -45,7 +45,7 @@ protected:
 	UINT64 currentFenceValue_;
 	UINT64 fenceValues_[QUEUE_SLOT_COUNT];
 
-	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> renderTargetDescriptorHeap_;
 
 private:
 	void Initialize ();
@@ -65,6 +65,7 @@ private:
 	void CreateConstantBuffer ();
 	void CreateTexture ();
 	void SetupSwapChain ();
+	void CreateRenderTargetView ();
 
 	std::unique_ptr<Window> window_;
 

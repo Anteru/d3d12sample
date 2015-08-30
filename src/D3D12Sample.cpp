@@ -96,7 +96,7 @@ void D3D12Sample::PrepareRender ()
 	auto commandList = commandLists_ [currentBackBuffer_].Get ();
 	commandList->Reset (
 		commandAllocators_ [currentBackBuffer_].Get (), nullptr);
-	commandList->OMSetRenderTargets (1, &descriptorHeap_->GetCPUDescriptorHandleForHeapStart (), true, nullptr);
+	commandList->OMSetRenderTargets (1, &renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart (), true, nullptr);
 	commandList->RSSetViewports (1, &viewport_);
 	commandList->RSSetScissorRects (1, &rectScissor_);
 
@@ -116,7 +116,7 @@ void D3D12Sample::PrepareRender ()
 		1
 	};
 
-	commandList->ClearRenderTargetView (descriptorHeap_->GetCPUDescriptorHandleForHeapStart (),
+	commandList->ClearRenderTargetView (renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart (),
 		clearColor, 0, nullptr);
 }
 
@@ -218,6 +218,32 @@ void D3D12Sample::Run (const int frameCount)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+/**
+Create a render target view for the current render target. This will update
+the first entry in the descriptor heap.
+
+This function does not use a default view but instead changes the format to
+_SRGB.
+*/
+void D3D12Sample::CreateRenderTargetView ()
+{
+	const auto resourceDesc = renderTarget_->GetDesc ();
+
+	D3D12_RENDER_TARGET_VIEW_DESC viewDesc;
+	viewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+	viewDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+	viewDesc.Texture2D.MipSlice = 0;
+	viewDesc.Texture2D.PlaneSlice = 0;
+
+	device_->CreateRenderTargetView (renderTarget_.Get (), &viewDesc,
+		renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart ());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/**
+Present the current frame by swapping the back buffer, then move to the
+next back buffer and also signal the fence for the current queue slot entry.
+*/
 void D3D12Sample::Present ()
 {
 	swapChain_->Present (1, 0);
@@ -227,8 +253,7 @@ void D3D12Sample::Present ()
 	swapChain_->GetBuffer (currentBackBuffer_, IID_PPV_ARGS (&renderTarget_));
 
 	// Update our render target slot
-	device_->CreateRenderTargetView (renderTarget_.Get (), nullptr,
-		descriptorHeap_->GetCPUDescriptorHandleForHeapStart ());
+	CreateRenderTargetView ();
 
 	// Mark the fence for the current frame.
 	const auto fenceValue = currentFenceValue_;
@@ -238,13 +263,17 @@ void D3D12Sample::Present ()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+/**
+Set up swap chain related resources, that is, the render target view, the
+fences, and the descriptor heap for the render target.
+*/
 void D3D12Sample::SetupSwapChain ()
 {
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
 	heapDesc.NumDescriptors = 1;
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-	device_->CreateDescriptorHeap (&heapDesc, IID_PPV_ARGS (&descriptorHeap_));
+	device_->CreateDescriptorHeap (&heapDesc, IID_PPV_ARGS (&renderTargetDescriptorHeap_));
 
 	currentFenceValue_ = 0;
 
@@ -258,8 +287,7 @@ void D3D12Sample::SetupSwapChain ()
 	}
 
 	swapChain_->GetBuffer (currentBackBuffer_, IID_PPV_ARGS (&renderTarget_));
-	device_->CreateRenderTargetView (renderTarget_.Get (), nullptr,
-		descriptorHeap_->GetCPUDescriptorHandleForHeapStart ());
+	CreateRenderTargetView ();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -332,6 +360,9 @@ void D3D12Sample::CreateDeviceAndSwapChain ()
 	::ZeroMemory (&swapChainDesc, sizeof (swapChainDesc));
 
 	swapChainDesc.BufferCount = GetQueueSlotCount ();
+	// This is _UNORM but we'll use a _SRGB view on this. See 
+	// CreateRenderTargetView() for details, it must match what
+	// we specify here
 	swapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	swapChainDesc.BufferDesc.Width = window_->GetWidth ();
@@ -543,7 +574,7 @@ void D3D12Sample::CreateTexture ()
 		1 /* tight row packing */, &width, &height);
 	device_->CreateCommittedResource (&CD3DX12_HEAP_PROPERTIES (D3D12_HEAP_TYPE_DEFAULT),
 		D3D12_HEAP_FLAG_NONE,
-		&CD3DX12_RESOURCE_DESC::Tex2D (DXGI_FORMAT_R8G8B8A8_UNORM, width, height, 1, 1),
+		&CD3DX12_RESOURCE_DESC::Tex2D (DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, width, height, 1, 1),
 		D3D12_RESOURCE_STATE_COPY_DEST,
 		nullptr,
 		IID_PPV_ARGS (&image_));
@@ -568,7 +599,7 @@ void D3D12Sample::CreateTexture ()
 	D3D12_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc = {};
 	shaderResourceViewDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	shaderResourceViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	shaderResourceViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	shaderResourceViewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 	shaderResourceViewDesc.Texture2D.MipLevels = 1;
 	shaderResourceViewDesc.Texture2D.MostDetailedMip = 0;
 	shaderResourceViewDesc.Texture2D.ResourceMinLODClamp = 0.0f;
@@ -605,12 +636,21 @@ void D3D12Sample::CreatePipelineStateObject ()
 	psoDesc.PS.pShaderBytecode = pixelShader->GetBufferPointer ();
 	psoDesc.pRootSignature = rootSignature_.Get ();
 	psoDesc.NumRenderTargets = 1;
-	psoDesc.RTVFormats [0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+	psoDesc.RTVFormats [0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 	psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
 	psoDesc.InputLayout.NumElements = std::extent<decltype(layout)>::value;
 	psoDesc.InputLayout.pInputElementDescs = layout;
 	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC (D3D12_DEFAULT);
 	psoDesc.BlendState = CD3DX12_BLEND_DESC (D3D12_DEFAULT);
+	// Simple alpha blending
+	psoDesc.BlendState.RenderTarget [0].BlendEnable = true;
+	psoDesc.BlendState.RenderTarget [0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+	psoDesc.BlendState.RenderTarget [0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+	psoDesc.BlendState.RenderTarget [0].BlendOp = D3D12_BLEND_OP_ADD;
+	psoDesc.BlendState.RenderTarget [0].SrcBlendAlpha = D3D12_BLEND_ONE;
+	psoDesc.BlendState.RenderTarget [0].DestBlendAlpha = D3D12_BLEND_ZERO;
+	psoDesc.BlendState.RenderTarget [0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+	psoDesc.BlendState.RenderTarget [0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 	psoDesc.SampleDesc.Count = 1;
 	psoDesc.DepthStencilState.DepthEnable = false;
 	psoDesc.DepthStencilState.StencilEnable = false;
