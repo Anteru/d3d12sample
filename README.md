@@ -13,6 +13,8 @@ System requirements
 
 * Windows 10, 64-bit
 * Visual Studio 2015 with Visual C++ and Windows SDK installed. The free community edition is sufficient.
+* CMake 3.3 or later, from http://cmake.org
+* Python 3.4 or later, from http://python.org
 * A graphics card with D3D12 support, for instance, any GCN based AMD GPU
 
 Building
