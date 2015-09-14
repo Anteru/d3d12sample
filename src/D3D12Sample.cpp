@@ -121,21 +121,26 @@ void D3D12Sample::PrepareRender ()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-void D3D12Sample::Render ()
+void D3D12Sample::UpdateConstantBuffer ()
 {
-	PrepareRender ();
+	static int counter = 0;
+	counter++;
 
-	static int frameNumber = 0;
-	frameNumber++;
-	
-	auto commandList = commandLists_ [currentBackBuffer_].Get ();
-
-	// Update our constant buffer, just some periodic scaling
 	void* p;
 	constantBuffers_ [GetQueueSlot ()]->Map (0, nullptr, &p);
 	float* f = static_cast<float*>(p);
-	f [0] = std::abs (std::sin (static_cast<float> (frameNumber) / 64.0f));
+	f [0] = std::abs (std::sin (static_cast<float> (counter) / 64.0f));
 	constantBuffers_ [GetQueueSlot ()]->Unmap (0, nullptr);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+void D3D12Sample::Render ()
+{
+	PrepareRender ();
+	
+	auto commandList = commandLists_ [currentBackBuffer_].Get ();
+
+	UpdateConstantBuffer ();
 
 	// Set our state (shaders, etc.)
 	commandList->SetPipelineState (pso_.Get ());
@@ -308,19 +313,21 @@ void D3D12Sample::Initialize ()
 	// to upload data to the GPU.
 	device_->CreateFence (0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS (&uploadFence_));
 
+	ComPtr<ID3D12CommandAllocator> uploadCommandAllocator;
 	device_->CreateCommandAllocator (D3D12_COMMAND_LIST_TYPE_DIRECT,
-		IID_PPV_ARGS (&initCommandAllocator_));
+		IID_PPV_ARGS (&uploadCommandAllocator));
+	ComPtr<ID3D12GraphicsCommandList> uploadCommandList;
 	device_->CreateCommandList (0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-		initCommandAllocator_.Get (), nullptr,
-		IID_PPV_ARGS (&initCommandList_));
+		uploadCommandAllocator.Get (), nullptr,
+		IID_PPV_ARGS (&uploadCommandList));
 
-	CreateMeshBuffers ();
-	CreateTexture ();
+	CreateMeshBuffers (uploadCommandList.Get ());
+	CreateTexture (uploadCommandList.Get ());
 
-	initCommandList_->Close ();
+	uploadCommandList->Close ();
 
 	// Execute the upload and finish the command list
-	ID3D12CommandList* commandLists [] = { initCommandList_.Get () };
+	ID3D12CommandList* commandLists [] = { uploadCommandList.Get () };
 	commandQueue_->ExecuteCommandLists (std::extent<decltype(commandLists)>::value, commandLists);
 	commandQueue_->Signal (uploadFence_.Get (), 1);
 
@@ -328,9 +335,7 @@ void D3D12Sample::Initialize ()
 	WaitForFence (uploadFence_.Get (), 1, waitEvent);
 
 	// Cleanup our upload handle
-	initCommandAllocator_->Reset ();
-	initCommandList_.Reset ();
-	initCommandAllocator_.Reset ();
+	uploadCommandAllocator->Reset ();
 
 	CloseHandle (waitEvent);
 }
@@ -480,7 +485,7 @@ void D3D12Sample::CreateConstantBuffer ()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-void D3D12Sample::CreateMeshBuffers ()
+void D3D12Sample::CreateMeshBuffers (ID3D12GraphicsCommandList* uploadCommandList)
 {
 	struct Vertex
 	{
@@ -549,9 +554,9 @@ void D3D12Sample::CreateMeshBuffers ()
 
 	// Copy data from upload buffer on CPU into the index/vertex buffer on 
 	// the GPU
-	initCommandList_->CopyBufferRegion (vertexBuffer_.Get (), 0,
+	uploadCommandList->CopyBufferRegion (vertexBuffer_.Get (), 0,
 		uploadBuffer_.Get (), 0, sizeof (vertices));
-	initCommandList_->CopyBufferRegion (indexBuffer_.Get (), 0,
+	uploadCommandList->CopyBufferRegion (indexBuffer_.Get (), 0,
 		uploadBuffer_.Get (), sizeof (vertices), sizeof (indices));
 
 	// Barriers, batch them together
@@ -562,11 +567,11 @@ void D3D12Sample::CreateMeshBuffers ()
 			D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER)
 	};
 
-	initCommandList_->ResourceBarrier (2, barriers);
+	uploadCommandList->ResourceBarrier (2, barriers);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-void D3D12Sample::CreateTexture ()
+void D3D12Sample::CreateTexture (ID3D12GraphicsCommandList* uploadCommandList)
 {
 	int width = 0, height = 0;
 
@@ -592,8 +597,8 @@ void D3D12Sample::CreateTexture ()
 	srcData.RowPitch = width * 4;
 	srcData.SlicePitch = width * height * 4;
 
-	UpdateSubresources (initCommandList_.Get (), image_.Get (), uploadImage_.Get (), 0, 0, 1, &srcData);
-	initCommandList_->ResourceBarrier (1, &CD3DX12_RESOURCE_BARRIER::Transition (image_.Get (),
+	UpdateSubresources (uploadCommandList, image_.Get (), uploadImage_.Get (), 0, 0, 1, &srcData);
+	uploadCommandList->ResourceBarrier (1, &CD3DX12_RESOURCE_BARRIER::Transition (image_.Get (),
 		D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc = {};

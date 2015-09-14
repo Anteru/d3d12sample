@@ -56,14 +56,16 @@ private:
 
 	void Render ();
 	void Present ();
+	void UpdateConstantBuffer ();
+
 	void CreateDeviceAndSwapChain ();
 	void CreateAllocatorsAndCommandLists ();
 	void CreateViewportScissor ();
 	void CreateRootSignature ();
-	void CreateMeshBuffers ();
+	void CreateMeshBuffers (ID3D12GraphicsCommandList* uploadCommandList);
 	void CreatePipelineStateObject ();
 	void CreateConstantBuffer ();
-	void CreateTexture ();
+	void CreateTexture (ID3D12GraphicsCommandList* uploadCommandList);
 	void SetupSwapChain ();
 	void CreateRenderTargetView ();
 
@@ -92,9 +94,6 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>    srvDescriptorHeap_;
 
 	Microsoft::WRL::ComPtr<ID3D12Fence> uploadFence_;
-
-	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> initCommandList_;
-	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> initCommandAllocator_;
 
 	std::vector<std::uint8_t> imageData_;
 };
