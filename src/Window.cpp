@@ -19,7 +19,7 @@ LRESULT CALLBACK anteruWindowWndProc(
         return 0;
     }
 
-    return ::DefWindowProc(hwnd, uMsg, wParam, lParam);
+    return ::DefWindowProcA(hwnd, uMsg, wParam, lParam);
 }
 }
 
@@ -51,7 +51,7 @@ Window::Window(const std::string& title, const int width, const int height)
     ::SetRect(&rect, 0, 0, width, height);
     ::AdjustWindowRect(&rect, style, FALSE);
 
-    windowClass_.reset(new WindowClass("Akula Window", anteruWindowWndProc));
+    windowClass_.reset(new WindowClass("D3D12SampleWindowClass", anteruWindowWndProc));
 
     // Create the main window.
     hwnd_ = ::CreateWindowA(windowClass_->GetName().c_str(),

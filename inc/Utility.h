@@ -1,5 +1,5 @@
-#ifndef MANTLE_TEST_UTILITY_H_
-#define MANTLE_TEST_UTILITY_H_
+#ifndef ANTERU_D3D12_SAMPLE_UTILITY_H_
+#define ANTERU_D3D12_SAMPLE_UTILITY_H_
 
 #include <vector>
 #include <cstdint>

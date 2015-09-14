@@ -12,7 +12,6 @@ ADD_SUBDIRECTORY(extern)
 
 SET(HEADERS
   inc/D3D12Sample.h
-  inc/Test.h
 
   inc/ImageIO.h
   inc/Utility.h

@@ -1,5 +1,5 @@
-#ifndef MANTLE_TEST_IMAGE_IO_H_
-#define MANTLE_TEST_IMAGE_IO_H_
+#ifndef ANTERU_D3D12_SAMPLE_IMAGEIO_H_
+#define ANTERU_D3D12_SAMPLE_IMAGEIO_H_
 
 #include <vector>
 #include <cstdint>
@@ -12,6 +12,6 @@ std::vector<std::uint8_t> LoadImageFromFile (const char* path, const int rowAlig
 	int* width, int* height);
 
 std::vector<std::uint8_t> LoadImageFromMemory(const void* data, const std::size_t size, const int rowAlignment,
-    int* width, int* height);
+	int* width, int* height);
 
 #endif
