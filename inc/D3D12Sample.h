@@ -37,7 +37,7 @@ protected:
 	D3D12_RECT rectScissor_;
 	Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain_;
 	Microsoft::WRL::ComPtr<ID3D12Device> device_;
-	Microsoft::WRL::ComPtr<ID3D12Resource> renderTarget_;
+	Microsoft::WRL::ComPtr<ID3D12Resource> renderTargets_ [QUEUE_SLOT_COUNT];
 	Microsoft::WRL::ComPtr<ID3D12CommandQueue> commandQueue_;
 
 	HANDLE frameFenceEvents_ [QUEUE_SLOT_COUNT];
@@ -67,7 +67,7 @@ private:
 	void CreateConstantBuffer ();
 	void CreateTexture (ID3D12GraphicsCommandList* uploadCommandList);
 	void SetupSwapChain ();
-	void CreateRenderTargetView ();
+	void SetupRenderTargets ();
 
 	std::unique_ptr<Window> window_;
 
@@ -96,6 +96,7 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12Fence> uploadFence_;
 
 	std::vector<std::uint8_t> imageData_;
+	std::int32_t renderTargetViewDescriptorSize_;
 };
 }
 

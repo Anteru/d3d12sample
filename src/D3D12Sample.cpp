@@ -96,13 +96,19 @@ void D3D12Sample::PrepareRender ()
 	auto commandList = commandLists_ [currentBackBuffer_].Get ();
 	commandList->Reset (
 		commandAllocators_ [currentBackBuffer_].Get (), nullptr);
-	commandList->OMSetRenderTargets (1, &renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart (), true, nullptr);
+
+	D3D12_CPU_DESCRIPTOR_HANDLE renderTargetHandle;
+	CD3DX12_CPU_DESCRIPTOR_HANDLE::InitOffsetted (renderTargetHandle,
+		renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart (),
+		currentBackBuffer_, renderTargetViewDescriptorSize_);
+
+	commandList->OMSetRenderTargets (1, &renderTargetHandle, true, nullptr);
 	commandList->RSSetViewports (1, &viewport_);
 	commandList->RSSetScissorRects (1, &rectScissor_);
 
 	// Transition back buffer
 	D3D12_RESOURCE_BARRIER barrier;
-	barrier.Transition.pResource = renderTarget_.Get ();
+	barrier.Transition.pResource = renderTargets_ [currentBackBuffer_].Get ();
 	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
 	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
@@ -116,7 +122,7 @@ void D3D12Sample::PrepareRender ()
 		1
 	};
 
-	commandList->ClearRenderTargetView (renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart (),
+	commandList->ClearRenderTargetView (renderTargetHandle,
 		clearColor, 0, nullptr);
 }
 
@@ -174,7 +180,7 @@ void D3D12Sample::FinalizeRender ()
 {
 	// Transition the swap chain back to present
 	D3D12_RESOURCE_BARRIER barrier;
-	barrier.Transition.pResource = renderTarget_.Get ();
+	barrier.Transition.pResource = renderTargets_ [currentBackBuffer_].Get ();
 	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
 	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -224,24 +230,35 @@ void D3D12Sample::Run (const int frameCount)
 
 ///////////////////////////////////////////////////////////////////////////////
 /**
-Create a render target view for the current render target. This will update
-the first entry in the descriptor heap.
+Setup all render targets. This creates the render target descriptor heap and
+render target views for all render targets.
 
 This function does not use a default view but instead changes the format to
 _SRGB.
 */
-void D3D12Sample::CreateRenderTargetView ()
+void D3D12Sample::SetupRenderTargets ()
 {
-	const auto resourceDesc = renderTarget_->GetDesc ();
+	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+	heapDesc.NumDescriptors = GetQueueSlotCount ();
+	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+	device_->CreateDescriptorHeap (&heapDesc, IID_PPV_ARGS (&renderTargetDescriptorHeap_));
 
-	D3D12_RENDER_TARGET_VIEW_DESC viewDesc;
-	viewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-	viewDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-	viewDesc.Texture2D.MipSlice = 0;
-	viewDesc.Texture2D.PlaneSlice = 0;
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle{ 
+		renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart () };
 
-	device_->CreateRenderTargetView (renderTarget_.Get (), &viewDesc,
-		renderTargetDescriptorHeap_->GetCPUDescriptorHandleForHeapStart ());
+	for (int i = 0; i < GetQueueSlotCount (); ++i) {
+		D3D12_RENDER_TARGET_VIEW_DESC viewDesc;
+		viewDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+		viewDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+		viewDesc.Texture2D.MipSlice = 0;
+		viewDesc.Texture2D.PlaneSlice = 0;
+
+		device_->CreateRenderTargetView (renderTargets_ [i].Get (), &viewDesc,
+			rtvHandle);
+
+		rtvHandle.Offset (renderTargetViewDescriptorSize_);
+	}
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -255,10 +272,6 @@ void D3D12Sample::Present ()
 
 	// Take the next back buffer from our chain
 	currentBackBuffer_ = (currentBackBuffer_ + 1) % GetQueueSlotCount ();
-	swapChain_->GetBuffer (currentBackBuffer_, IID_PPV_ARGS (&renderTarget_));
-
-	// Update our render target slot
-	CreateRenderTargetView ();
 
 	// Mark the fence for the current frame.
 	const auto fenceValue = currentFenceValue_;
@@ -274,12 +287,6 @@ fences, and the descriptor heap for the render target.
 */
 void D3D12Sample::SetupSwapChain ()
 {
-	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-	heapDesc.NumDescriptors = 1;
-	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-	device_->CreateDescriptorHeap (&heapDesc, IID_PPV_ARGS (&renderTargetDescriptorHeap_));
-
 	currentFenceValue_ = 0;
 
 	// Create fences for each frame so we can protect resources and wait for
@@ -291,8 +298,11 @@ void D3D12Sample::SetupSwapChain ()
 			IID_PPV_ARGS (&frameFences_ [i]));
 	}
 
-	swapChain_->GetBuffer (currentBackBuffer_, IID_PPV_ARGS (&renderTarget_));
-	CreateRenderTargetView ();
+	for (int i = 0; i < GetQueueSlotCount (); ++i) {
+		swapChain_->GetBuffer (i, IID_PPV_ARGS (&renderTargets_ [i]));
+	}
+
+	SetupRenderTargets ();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -383,6 +393,9 @@ void D3D12Sample::CreateDeviceAndSwapChain ()
 	device_ = renderEnv.device;
 	commandQueue_ = renderEnv.queue;
 	swapChain_ = renderEnv.swapChain;
+
+	renderTargetViewDescriptorSize_ =
+		device_->GetDescriptorHandleIncrementSize (D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
 	SetupSwapChain ();
 }
