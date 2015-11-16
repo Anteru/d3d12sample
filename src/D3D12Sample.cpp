@@ -368,7 +368,10 @@ void D3D12Sample::CreateDeviceAndSwapChain ()
 #ifdef _DEBUG
 	ComPtr<ID3D12Debug> debugController;
 	D3D12GetDebugInterface (IID_PPV_ARGS (&debugController));
-	debugController->EnableDebugLayer ();
+
+	if (debugController) {
+		debugController->EnableDebugLayer ();
+	}
 #endif
 
 	DXGI_SWAP_CHAIN_DESC swapChainDesc;
