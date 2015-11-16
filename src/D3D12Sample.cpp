@@ -270,14 +270,14 @@ void D3D12Sample::Present ()
 {
 	swapChain_->Present (1, 0);
 
-	// Take the next back buffer from our chain
-	currentBackBuffer_ = (currentBackBuffer_ + 1) % GetQueueSlotCount ();
-
 	// Mark the fence for the current frame.
 	const auto fenceValue = currentFenceValue_;
 	commandQueue_->Signal (frameFences_ [currentBackBuffer_].Get (), fenceValue);
 	fenceValues_[currentBackBuffer_] = fenceValue;
 	++currentFenceValue_;
+
+	// Take the next back buffer from our chain
+	currentBackBuffer_ = (currentBackBuffer_ + 1) % GetQueueSlotCount ();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
