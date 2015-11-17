@@ -296,7 +296,7 @@ void D3D12Sample::SetupSwapChain ()
 	for (int i = 0; i < GetQueueSlotCount (); ++i) {
 		frameFenceEvents_ [i] = CreateEvent (nullptr, FALSE, FALSE, nullptr);
 		fenceValues_ [i] = 0;
-		device_->CreateFence (currentFenceValue_, D3D12_FENCE_FLAG_NONE, 
+		device_->CreateFence (0, D3D12_FENCE_FLAG_NONE, 
 			IID_PPV_ARGS (&frameFences_ [i]));
 	}
 
