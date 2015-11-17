@@ -287,7 +287,9 @@ fences, and the descriptor heap for the render target.
 */
 void D3D12Sample::SetupSwapChain ()
 {
-	currentFenceValue_ = 0;
+	// This is the first fence value we'll set, has to be != our initial value
+	// below so we can wait on the first fence correctly
+	currentFenceValue_ = 1;
 
 	// Create fences for each frame so we can protect resources and wait for
 	// any given frame
